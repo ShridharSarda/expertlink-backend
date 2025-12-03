@@ -1,0 +1,40 @@
+=== Regression (Price) Metrics ===
+
+{
+  "MAE": 4.365186841666671,
+  "RMSE": 5.34583969806659,
+  "R2": 0.9854701811214962,
+  "n_test": 400
+}
+
+
+
+=== Classification (Subject) Report ===
+
+              precision    recall  f1-score   support
+
+   chemistry       1.00      1.00      1.00        97
+          cs       1.00      1.00      1.00       103
+        math       1.00      1.00      1.00       100
+     physics       1.00      1.00      1.00       100
+
+    accuracy                           1.00       400
+   macro avg       1.00      1.00      1.00       400
+weighted avg       1.00      1.00      1.00       400
+
+
+
+
+=== Retrieval Metrics ===
+
+{
+  "prec@1": 0.295,
+  "recall@1": 0.009833333333333333,
+  "prec@3": 0.2816666666666666,
+  "recall@3": 0.02816666666666667,
+  "prec@5": 0.2805,
+  "recall@5": 0.04675,
+  "prec@10": 0.26825000000000004,
+  "recall@10": 0.08941666666666666,
+  "MAP@10": 0.07035585317460318
+}

@@ -1,0 +1,10 @@
+              precision    recall  f1-score   support
+
+   chemistry       1.00      1.00      1.00        97
+          cs       1.00      1.00      1.00       103
+        math       1.00      1.00      1.00       100
+     physics       1.00      1.00      1.00       100
+
+    accuracy                           1.00       400
+   macro avg       1.00      1.00      1.00       400
+weighted avg       1.00      1.00      1.00       400

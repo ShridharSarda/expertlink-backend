@@ -18,7 +18,7 @@ def seed():
         {"name":"Dave Mentor","email":"dave@demo.com","password":"pass","role":"mentor","subjects":"cs","experience_years":6},
         {"name":"Eve Mentor","email":"eve@demo.com","password":"pass","role":"mentor","subjects":"math,cs","experience_years":2}
     ]
-    demo_students = [
+    demo_students = [   
         {"name":"Student One","email":"s1@demo.com","password":"pass","role":"student"},
         {"name":"Student Two","email":"s2@demo.com","password":"pass","role":"student"}
     ]

@@ -26,39 +26,54 @@ def post_question(payload: QuestionIn, db: Session = Depends(get_db)):
 
     # ML keyword extraction
     keywords = extract_keywords(payload.text)
-    
-    # ML price prediction
+
+    # ML price prediction (unchanged technique)
     price = predict_price(payload.text, payload.subject)
 
-    # ML mentor matching (ML may return numeric ids or other identifiers)
-    ml_matched = match_mentors(payload.text, payload.subject, db) or []
+    # ML mentor matching - returns list of {"mentor_id":.., "score":..}
+    ml_matches = match_mentors(payload.text, payload.subject, db) or []
 
-    # fallback: DB mentors who teach the subject
+    # Build maps/lists from ML output (handle older format if ml returned ints)
+    ml_ids = []
+    ml_scores_map = {}
+    for entry in ml_matches:
+        # entry may be dict {"mentor_id":..., "score":...} or an int string/id
+        if isinstance(entry, dict) and "mentor_id" in entry:
+            mid = int(entry["mentor_id"])
+            ml_ids.append(mid)
+            ml_scores_map[mid] = float(entry.get("score", 0.0))
+        else:
+            # try convert raw value to int
+            try:
+                mid = int(entry)
+                ml_ids.append(mid)
+            except Exception:
+                pass
+
+    # DB mentors who teach the subject (fallback / boost)
     db_matched = db.query(User).filter(
         User.role == "mentor",
         User.subjects.contains(payload.subject)
     ).all()
-
-    # Merge DB ids + ML ids, dedupe, keep numeric ids only
     db_ids = [m.id for m in db_matched] if db_matched else []
-    ml_ids = []
-    for m in ml_matched:
-        try:
-            ml_ids.append(int(m))
-        except Exception:
-            # If ML returned non-numeric identifiers, ignore here or map them if you have mapping logic
-            pass
 
-    # prefer DB matches first, then ML matches not already present
-    combined = db_ids + [i for i in ml_ids if i not in db_ids]
-    matched_ids = list(dict.fromkeys(combined))  # dedupe while keeping order
+    # Combine: keep ML ordering, but ensure DB subject mentors are included
+    combined_order = []
+    for mid in ml_ids:
+        if mid not in combined_order:
+            combined_order.append(mid)
+    for mid in db_ids:
+        if mid not in combined_order:
+            combined_order.append(mid)
 
-    # fallback if still empty
-    if not matched_ids:
-        # try all mentors as absolute fallback
+    # absolute fallback: all mentors
+    if not combined_order:
         all_mentors = db.query(User).filter(User.role == "mentor").all()
-        matched_ids = [m.id for m in all_mentors]
+        combined_order = [m.id for m in all_mentors]
 
+    matched_ids = combined_order
+
+    # Save question (store matched mentors as CSV for compatibility)
     q = Question(
         student_id=payload.student_id,
         text=payload.text,
@@ -71,10 +86,13 @@ def post_question(payload: QuestionIn, db: Session = Depends(get_db)):
     db.add(q)
     db.commit()
     db.refresh(q)
-      # --- build mentor objects for frontend (name, subjects, computed score) ---
-    mentor_rows = db.query(User).filter(User.id.in_(matched_ids)).all()
 
-    def compute_score(mentor: User, question_keywords):
+    # Build mentor objects for frontend (name, subjects, computed score 0..1)
+    mentor_rows = db.query(User).filter(User.id.in_(matched_ids)).all()
+    mentor_map = {m.id: m for m in mentor_rows}
+
+    def compute_overlap_score(mentor: User, question_keywords):
+        # fallback overlap-based score (0..1)
         mk = []
         if mentor.solved_keywords:
             mk += [k.strip().lower() for k in mentor.solved_keywords.split(",") if k.strip()]
@@ -87,16 +105,27 @@ def post_question(payload: QuestionIn, db: Session = Depends(get_db)):
         return round(overlap / max(1, len(question_keywords)), 4)
 
     mentors_list = []
-    mentor_map = {m.id: m for m in mentor_rows}
     for mid in matched_ids:
         m = mentor_map.get(int(mid))
         if not m:
             continue
+        # prefer ML-provided score if present (ml_scores_map stores percent 0..100)
+        raw_score = ml_scores_map.get(m.id)
+        if raw_score is None:
+            # fallback to overlap 0..1
+            normalized_score = compute_overlap_score(m, keywords)
+        else:
+            # ml returned percent (0..100) — convert to 0..1 to keep frontend expectation
+            try:
+                normalized_score = float(raw_score) / 100.0
+            except Exception:
+                normalized_score = compute_overlap_score(m, keywords)
+
         mentors_list.append({
             "id": m.id,
             "name": m.name,
             "subjects": m.subjects.split(",") if m.subjects else [],
-            "score": compute_score(m, keywords)  # frontend expects 0..1
+            "score": normalized_score  # 0..1 float (frontend expects this)
         })
 
     return {
@@ -141,8 +170,8 @@ def accept_question(body: dict, db: Session = Depends(get_db)):
     # Update mentor stats safely (handle None values)
     mentor.solved_count = (mentor.solved_count or 0) + 1
 
-    new_keywords = q.keywords.split(",") if q.keywords else []
-    existing_keywords = mentor.solved_keywords.split(",") if mentor.solved_keywords else []
+    new_keywords = [k.strip().lower() for k in (q.keywords or "").split(",") if k.strip()]
+    existing_keywords = [k.strip().lower() for k in (mentor.solved_keywords or "").split(",") if k.strip()]
     updated_keywords = list(dict.fromkeys(existing_keywords + new_keywords))
     mentor.solved_keywords = ",".join(updated_keywords)
 
@@ -188,6 +217,17 @@ def get_question(question_id: int, db: Session = Depends(get_db)):
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
 
+    mentor_info = None
+    if q.accepted_mentor:
+        m = db.query(User).filter(User.id == q.accepted_mentor).first()
+        if m:
+            mentor_info = {
+                "id": m.id,
+                "name": m.name,
+                "subjects": m.subjects.split(",") if m.subjects else [],
+                # add more fields if you want (email, experience, rating...)
+            }
+
     return {
         "id": q.id,
         "student_id": q.student_id,
@@ -199,7 +239,9 @@ def get_question(question_id: int, db: Session = Depends(get_db)):
         "matched_mentors": q.matched_mentors,
         "accepted_mentor": q.accepted_mentor,
         "meeting_link": q.meeting_link,
+        "mentor": mentor_info
     }
+
 
 @router.get("/student/{student_id}")
 def get_questions_by_student(student_id: int, db: Session = Depends(get_db)):
@@ -255,5 +297,5 @@ def get_questions_for_mentor(mentor_id: int, db: Session = Depends(get_db)):
                 "price": q.price,
                 "status": q.status,
             })
-
+    
     return {"pending": result}
